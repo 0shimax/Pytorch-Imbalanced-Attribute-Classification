@@ -7,12 +7,36 @@ from torchvision import datasets, transforms
 from model.net import Net
 
 
+def ace_loss(y_hat, target):
+    inference = F.log_softmax(y, dim=1)
+    return F.nll_loss(inference, target)
+
+
+def wfl_loss(y_hat, y, wc, gamma=0.5):
+    """
+    wc = e^{-a_c}
+    where a_c the prior class distribution of the cth attribute
+    """
+    term1 = (1 - F.softmax(y_hat))**gamma * torch.log(F.softmax(y_hat)) * y
+    term2 = F.softmax(y_hat)**gamma * torch.log(1 - F.softmax(y_hat)) * (1 - y)
+    agg = wc*(term1 + term2)
+    return -agg.sum()
+
+
+def calculate_loss(yp, y_a1, y_a2, target, i_epoch):
+    loss = None
+    if i_epoch < 10:
+        loss = ace_loss(yp, target)
+    else:
+        loss = wfl_loss(yp, target, wc)
+    return loss
+
 def train(args, model, device, train_loader, optimizer, epoch):
     model.train()
     for batch_idx, (data, target) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
         optimizer.zero_grad()
-        output = model(data)
+        yp, y_a1, y_a2 = model(data)
         # TODO: add al and a2 loss
         loss = F.nll_loss(output, target)
         loss.backward()

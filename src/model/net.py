@@ -56,5 +56,6 @@ class Net(nn.Module):
         x_a2 = F.relu(self.fc1_a2(a2.view(n_batch, -1)))
         y_a2 = self.fc2_a2(x_a2)
 
-        y = yp + y_a1 + y_a2
-        return F.log_softmax(y, dim=1)
+        # y = yp + y_a1 + y_a2
+        # return F.log_softmax(y, dim=1)
+        return yp, y_a1, y_a2
