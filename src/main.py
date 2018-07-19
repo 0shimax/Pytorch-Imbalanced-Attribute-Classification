@@ -1,4 +1,5 @@
 import argparse
+import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
@@ -8,8 +9,12 @@ from model.net import Net
 
 
 def ace_loss(y_hat, target):
-    inference = F.log_softmax(y, dim=1)
+    inference = F.log_softmax(y_hat, dim=1)
     return F.nll_loss(inference, target)
+
+
+def calculate_std_h(var_phx, n_batch):
+    return torch.pow(var_phx + (var_phx**2)/(n_batch - 1), 0.5)
 
 
 def wfl_loss(y_hat, y, wc, gamma=0.5):
@@ -23,22 +28,42 @@ def wfl_loss(y_hat, y, wc, gamma=0.5):
     return -agg.sum()
 
 
-def calculate_loss(yp, y_a1, y_a2, target, i_epoch):
+def ax_loss(yax_hat, y, std_hx):
+    return (1 + std_hx) * ace_loss(yax_hat, y)
+
+
+def calculate_loss(yp, y_a1, y_a2, target, wc,
+                   std_h1, std_h2, i_epoch, burn_in=2):
     loss = None
-    if i_epoch < 10:
+    if i_epoch < burn_in:
         loss = ace_loss(yp, target)
     else:
         loss = wfl_loss(yp, target, wc)
+        loss += ax_loss(y_a1, target, std_h1)
+        loss += ax_loss(y_a2, target, std_h2)
     return loss
 
-def train(args, model, device, train_loader, optimizer, epoch):
+
+def train(args, model, device, train_loader, optimizer, epoch, wc):
     model.train()
+
+    var_ph1 = torch.zeros(1)
+    var_ph2 = torch.zeros(1)
     for batch_idx, (data, target) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
+        n_batch = data.shape[0]
         optimizer.zero_grad()
+
+        std_h1 = calculate_std_h(var_ph1, n_batch)
+        std_h2 = calculate_std_h(var_ph1, n_batch)
         yp, y_a1, y_a2 = model(data)
-        # TODO: add al and a2 loss
-        loss = F.nll_loss(output, target)
+
+        fst_index = np.arange(n_batch)
+        var_ph1 = y_a1[[fst_index, target]].var()
+        var_ph2 = y_a2[[fst_index, target]].var()
+
+        loss = calculate_loss(yp, y_a1, y_a2, target, wc, std_h1, std_h1, epoch)
+
         loss.backward()
         optimizer.step()
         if batch_idx % args.log_interval == 0:
@@ -54,11 +79,12 @@ def test(args, model, device, test_loader):
     with torch.no_grad():
         for data, target in test_loader:
             data, target = data.to(device), target.to(device)
-            output = model(data)
+            yp, y_a1, y_a2 = model(data)
             # sum up batch loss
-            test_loss += F.nll_loss(output, target, size_average=False).item()
+            test_loss += F.nll_loss(F.log_softmax(yp, dim=1), target,
+                                    size_average=False).item()
             # get the index of the max log-probability
-            pred = output.max(1, keepdim=True)[1]
+            pred = yp.max(1, keepdim=True)[1]
             correct += pred.eq(target.view_as(pred)).sum().item()
 
     test_loss /= len(test_loader.dataset)
@@ -112,8 +138,14 @@ def main():
     optimizer = optim.SGD(
         model.parameters(), lr=args.lr, momentum=args.momentum)
 
+    wc = np.zeros(10)
+    for _, target in train_loader:
+        for t in target:
+            wc[t] += 1
+    wc /= len(train_loader) * args.batch_size
+
     for epoch in range(1, args.epochs + 1):
-        train(args, model, device, train_loader, optimizer, epoch)
+        train(args, model, device, train_loader, optimizer, epoch, wc)
         test(args, model, device, test_loader)
 
 
