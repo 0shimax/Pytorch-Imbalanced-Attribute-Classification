@@ -14,7 +14,7 @@ def ace_loss(y_hat, target):
 
 
 def calculate_std_h(var_phx, n_batch):
-    return torch.pow(var_phx + (var_phx**2)/(n_batch - 1), 0.5)
+    return torch.pow(var_phx + (var_phx**2)/max(n_batch - 1, 1), 0.5)
 
 
 def wfl_loss(y_hat, y, wc, gamma=0.5):
@@ -22,14 +22,15 @@ def wfl_loss(y_hat, y, wc, gamma=0.5):
     wc = e^{-a_c}
     where a_c the prior class distribution of the cth attribute
     """
-    term1 = (1 - F.softmax(y_hat))**gamma * torch.log(F.softmax(y_hat)) * y
-    term2 = F.softmax(y_hat)**gamma * torch.log(1 - F.softmax(y_hat)) * (1 - y)
-    agg = wc*(term1 + term2)
-    return -agg.sum()
+    log_y = F.log_softmax(y_hat, dim=1)
+    log_yd = (wc*((1 - torch.exp(log_y))**gamma)*log_y)[np.arange(len(y)), y]
+    # print(log_yd)
+
+    return -log_yd.mean()
 
 
 def ax_loss(yax_hat, y, std_hx):
-    return (1 + std_hx) * ace_loss(yax_hat, y)
+    return (1 + std_hx.item()) * ace_loss(yax_hat, y)
 
 
 def calculate_loss(yp, y_a1, y_a2, target, wc,
@@ -39,8 +40,11 @@ def calculate_loss(yp, y_a1, y_a2, target, wc,
         loss = ace_loss(yp, target)
     else:
         loss = wfl_loss(yp, target, wc)
+        # print("wfl loss:", loss)
         loss += ax_loss(y_a1, target, std_h1)
+        # print("ax1 loss:", loss)
         loss += ax_loss(y_a2, target, std_h2)
+        # print("ax2 loss:", loss)
     return loss
 
 
@@ -65,6 +69,7 @@ def train(args, model, device, train_loader, optimizer, epoch, wc):
         loss = calculate_loss(yp, y_a1, y_a2, target, wc, std_h1, std_h1, epoch)
 
         loss.backward()
+        # torch.nn.utils.clip_grad_norm(model.parameters(), 5)
         optimizer.step()
         if batch_idx % args.log_interval == 0:
             print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
@@ -96,13 +101,13 @@ def test(args, model, device, test_loader):
 def main():
     # Training settings
     parser = argparse.ArgumentParser(description='PyTorch MNIST Example')
-    parser.add_argument('--batch-size', type=int, default=64, metavar='N',
+    parser.add_argument('--batch-size', type=int, default=32, metavar='N',
                         help='input batch size for training (default: 64)')
     parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
                         help='input batch size for testing (default: 1000)')
     parser.add_argument('--epochs', type=int, default=10, metavar='N',
                         help='number of epochs to train (default: 10)')
-    parser.add_argument('--lr', type=float, default=0.01, metavar='LR',
+    parser.add_argument('--lr', type=float, default=0.001, metavar='LR',
                         help='learning rate (default: 0.01)')
     parser.add_argument('--momentum', type=float, default=0.5, metavar='M',
                         help='SGD momentum (default: 0.5)')
@@ -137,12 +142,14 @@ def main():
     model = Net().to(device)
     optimizer = optim.SGD(
         model.parameters(), lr=args.lr, momentum=args.momentum)
+    # optimizer = optim.Adam(model.parameters())
 
     wc = np.zeros(10)
     for _, target in train_loader:
         for t in target:
             wc[t] += 1
     wc /= len(train_loader) * args.batch_size
+    wc = torch.FloatTensor(np.exp(-wc))
 
     for epoch in range(1, args.epochs + 1):
         train(args, model, device, train_loader, optimizer, epoch, wc)
