@@ -22,8 +22,9 @@ def wfl_loss(y_hat, y, wc, gamma=0.5):
     wc = e^{-a_c}
     where a_c the prior class distribution of the cth attribute
     """
-    log_y = F.log_softmax(y_hat, dim=1)
-    log_yd = (wc*((1 - torch.exp(log_y))**gamma)*log_y)[np.arange(len(y)), y]
+    # log_y = F.log_softmax(y_hat, dim=1)
+    log_y = F.sigmoid(y_hat)
+    log_yd = (wc*((1 - log_y)**gamma)*torch.log1p(log_y))[np.arange(len(y)), y]
     # print(log_yd)
 
     return -log_yd.mean()
@@ -37,7 +38,8 @@ def calculate_loss(yp, y_a1, y_a2, target, wc,
                    std_h1, std_h2, i_epoch, burn_in=2):
     loss = None
     if i_epoch < burn_in:
-        loss = ace_loss(yp, target)
+        y_hat = (yp + y_a1 + y_a2)/3
+        loss = ace_loss(y_hat, target)
     else:
         loss = wfl_loss(yp, target, wc)
         # print("wfl loss:", loss)
@@ -59,17 +61,17 @@ def train(args, model, device, train_loader, optimizer, epoch, wc):
         optimizer.zero_grad()
 
         std_h1 = calculate_std_h(var_ph1, n_batch)
-        std_h2 = calculate_std_h(var_ph1, n_batch)
+        std_h2 = calculate_std_h(var_ph2, n_batch)
         yp, y_a1, y_a2 = model(data)
 
         fst_index = np.arange(n_batch)
         var_ph1 = y_a1[[fst_index, target]].var()
         var_ph2 = y_a2[[fst_index, target]].var()
 
-        loss = calculate_loss(yp, y_a1, y_a2, target, wc, std_h1, std_h1, epoch)
+        loss = calculate_loss(yp, y_a1, y_a2, target, wc, std_h1, std_h2, epoch)
 
         loss.backward()
-        # torch.nn.utils.clip_grad_norm(model.parameters(), 5)
+        torch.nn.utils.clip_grad_norm(model.parameters(), 1)
         optimizer.step()
         if batch_idx % args.log_interval == 0:
             print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
@@ -101,13 +103,13 @@ def test(args, model, device, test_loader):
 def main():
     # Training settings
     parser = argparse.ArgumentParser(description='PyTorch MNIST Example')
-    parser.add_argument('--batch-size', type=int, default=32, metavar='N',
+    parser.add_argument('--batch-size', type=int, default=64, metavar='N',
                         help='input batch size for training (default: 64)')
     parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
                         help='input batch size for testing (default: 1000)')
     parser.add_argument('--epochs', type=int, default=10, metavar='N',
                         help='number of epochs to train (default: 10)')
-    parser.add_argument('--lr', type=float, default=0.001, metavar='LR',
+    parser.add_argument('--lr', type=float, default=0.01, metavar='LR',
                         help='learning rate (default: 0.01)')
     parser.add_argument('--momentum', type=float, default=0.5, metavar='M',
                         help='SGD momentum (default: 0.5)')
